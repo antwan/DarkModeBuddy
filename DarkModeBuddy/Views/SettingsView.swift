@@ -19,6 +19,7 @@ struct SettingsView: View {
     @State private var isShowingDarknessValueOutOfBoundsAlert = false
     @State private var isEditingAmbientLightLevelManually = false
     @State private var editingAmbientLightManuallyTextFieldStore = ""
+    @State private var selectedTimeMode: TimeScheduleMode = .fixedTime
 
     private static let hourOptions = Array(0...23)
     private static let minuteOptions = [0, 15, 30, 45]
@@ -110,7 +111,20 @@ struct SettingsView: View {
                         .padding(.top, 16)
 
                     if settings.timeScheduleMode != .disabled {
-                        fixedTimeControls
+                        Picker("Only change theme within:", selection: timeModePickerBinding) {
+                            Text("Fixed time window").tag(TimeScheduleMode.fixedTime)
+                            Text("Relative to sunset/sunrise").tag(TimeScheduleMode.solarRelative)
+                        }
+                        .pickerStyle(RadioGroupPickerStyle())
+                        .padding(.leading, 8)
+
+                        if selectedTimeMode == .fixedTime {
+                            fixedTimeControls
+                        }
+
+                        if selectedTimeMode == .solarRelative {
+                            solarRelativeControls
+                        }
                     }
                 }
             }
@@ -131,9 +145,21 @@ struct SettingsView: View {
             get: { settings.timeScheduleMode != .disabled },
             set: { enabled in
                 if enabled {
-                    settings.timeScheduleMode = .fixedTime
+                    settings.timeScheduleMode = selectedTimeMode
                 } else {
                     settings.timeScheduleMode = .disabled
+                }
+            }
+        )
+    }
+
+    private var timeModePickerBinding: Binding<TimeScheduleMode> {
+        Binding(
+            get: { selectedTimeMode },
+            set: { newMode in
+                selectedTimeMode = newMode
+                if settings.timeScheduleMode != .disabled {
+                    settings.timeScheduleMode = newMode
                 }
             }
         )
@@ -180,6 +206,112 @@ struct SettingsView: View {
             }
         }
         .padding(.leading, 8)
+    }
+
+    // MARK: - Solar Relative Controls
+
+    private var solarRelativeControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 6){
+                        let startDropdown = Picker("", selection: $settings.sunsetOffsetMinutes) {
+                            ForEach(SolarOffset.allCases) { offset in
+                                Text(sunsetLabel(for: offset)).tag(offset.rawValue)
+                            }
+                        }
+                        .frame(width: 180, alignment: .leading)
+
+                        HStack {
+                            Text("Start:").frame(width: 35, alignment: .leading)
+                            if #available(macOS 26.0, *) {
+                                startDropdown.buttonSizing(.flexible)
+                            } else {
+                                startDropdown
+                            }
+                        }
+                        let endDropdown = Picker("", selection: $settings.sunriseOffsetMinutes) {
+                            ForEach(SolarOffset.allCases) { offset in
+                                Text(sunriseLabel(for: offset)).tag(offset.rawValue)
+                            }
+                        }
+                        .frame(width: 180, alignment: .leading)
+
+                        HStack {
+                            Text("End:")
+                                .frame(width: 35, alignment: .leading)
+                            if #available(macOS 26.0, *) {
+                                endDropdown.buttonSizing(.flexible)
+                            } else {
+                                endDropdown
+                            }
+                        }
+                    }
+                    if locationManager.hasLocation {
+                        solarTimesDisplay
+                    }
+
+            }
+
+            if !locationManager.hasLocation {
+                HStack(spacing: 10) {
+                    Text("\u{26A0} Location required for sunrise/sunset calculation.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                    Button("Grant permission") {
+                        locationManager.requestPermission()
+                    }
+                    .font(.system(size: 11))
+                }.frame(height: 30, alignment: .trailing)
+            }
+
+            if let error = locationManager.locationError {
+                Text("Location error: \(error)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(.leading, 8)
+    }
+
+    private var solarTimesDisplay: some View {
+        VStack(alignment: .center, spacing: 13) {
+            if let sunset = timeScheduleManager.computedSunset {
+                HStack(spacing: 4) {
+                    Text("Adjusted time:")
+                    Text(sunset.formattedTime)
+                        .fontWeight(.medium)
+                }
+                .font(.system(size: 11))
+                .foregroundColor(Color(NSColor.secondaryLabelColor))
+            }
+            if let sunrise = timeScheduleManager.computedSunrise {
+                HStack(spacing: 4) {
+                    Text("Adjusted time:")
+                    Text(sunrise.formattedTime)
+                        .fontWeight(.medium)
+                }
+                .font(.system(size: 11))
+                .foregroundColor(Color(NSColor.secondaryLabelColor))
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func sunsetLabel(for offset: SolarOffset) -> String {
+        switch offset.rawValue {
+        case let v where v < 0: return "\(offset.label) before sunset"
+        case 0: return "At sunset"
+        default: return "\(offset.label) after sunset"
+        }
+    }
+
+    private func sunriseLabel(for offset: SolarOffset) -> String {
+        switch offset.rawValue {
+        case let v where v < 0: return "\(offset.label) before sunrise"
+        case 0: return "At sunrise"
+        default: return "\(offset.label) after sunrise"
+        }
     }
 }
 

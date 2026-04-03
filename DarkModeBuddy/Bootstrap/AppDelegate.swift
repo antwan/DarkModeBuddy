@@ -14,31 +14,46 @@ import Sparkle
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     var window: NSWindow!
-    
-    let settings = DMBSettings()
+
+    lazy var settings = DMBSettings()
+    lazy var locationManager = LocationManager()
+
+    lazy var timeScheduleManager: TimeScheduleManager = {
+        TimeScheduleManager(settings: settings, locationManager: locationManager)
+    }()
 
     lazy var switcher: DMBSystemAppearanceSwitcher = {
-        DMBSystemAppearanceSwitcher(settings: settings)
+        let s = DMBSystemAppearanceSwitcher(settings: settings)
+        s.timeScheduleManager = timeScheduleManager
+        return s
     }()
-    
+
     private var shouldShowUI: Bool {
         !settings.hasLaunchedAppBefore
         || shouldShowSettingsOnNextLaunch
         || UserDefaults.standard.bool(forKey: "ShowSettings")
     }
-    
+
     func applicationWillFinishLaunching(_ notification: Notification) {
+        guard !isRunningInPreview else { return }
         SUUpdater.shared()?.delegate = self
     }
 
+    private var isRunningInPreview: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PLAYGROUNDS"] != nil
+    }
+
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        guard !isRunningInPreview else { return }
+
         if shouldShowUI {
             settings.hasLaunchedAppBefore = true
             showSettingsWindow(nil)
         }
-        
+
+        timeScheduleManager.activate()
         switcher.activate()
-        
+
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(receivedShutdownNotification),
@@ -46,12 +61,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
     }
-    
+
     private lazy var sensorReader = DMBAmbientLightSensorReader(frequency: .realtime)
 
     @IBAction func showSettingsWindow(_ sender: Any?) {
         NSApp.setActivationPolicy(.regular)
-        
+
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 385, height: 360),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
@@ -63,23 +78,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isMovableByWindowBackground = true
         window.delegate = self
         window.isReleasedWhenClosed = false
-        
+
         let view = SettingsView()
             .environmentObject(sensorReader)
             .environmentObject(settings)
-        
+            .environmentObject(locationManager)
+            .environmentObject(timeScheduleManager)
+
         window.contentView = NSHostingView(rootView: view)
-        
+
         window.makeKeyAndOrderFront(nil)
         window.center()
-        
+
         NSApp.activate(ignoringOtherApps: true)
     }
-    
+
     @IBAction func terminate(_ sender: Any?) {
         // No need to confirm on quit if the user's Mac is not supported.
         shouldSkipTerminationConfirmation = !sensorReader.isSensorReady
-        
+
         NSApp.terminate(sender)
     }
 
@@ -90,21 +107,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !isShowingSettingsWindow else { return true }
-        
+
         showSettingsWindow(nil)
-        
+
         return true
     }
-    
+
     private var shouldShowSettingsOnNextLaunch: Bool {
         get {
             let value = UserDefaults.standard.bool(forKey: #function)
-            
+
             if value {
                 // Reset flag
                 UserDefaults.standard.set(false, forKey: #function)
             }
-            
+
             return value
         }
         set {
@@ -112,11 +129,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.synchronize()
         }
     }
-    
+
     private var shouldSkipTerminationConfirmation = false
-    
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !shouldSkipTerminationConfirmation else { return .terminateNow }
+        guard !shouldSkipTerminationConfirmation else {
+            switcher.restoreMacOSAutoDarkMode()
+            return .terminateNow
+        }
 
         let alert = NSAlert()
         alert.messageText = "Quit DarkModeBuddy?"
@@ -127,14 +147,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let result = alert.runModal()
 
         if result == .alertSecondButtonReturn {
+            switcher.restoreMacOSAutoDarkMode()
             return .terminateNow
         } else {
             window?.close()
-            
+
             return .terminateCancel
         }
     }
-    
+
     @objc func receivedShutdownNotification(_ note: Notification) {
         shouldSkipTerminationConfirmation = true
     }
@@ -145,21 +166,21 @@ extension AppDelegate: NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        
+
         window = nil
     }
-    
+
 }
 
 extension AppDelegate: SUUpdaterDelegate {
-    
+
     func updaterWillRelaunchApplication(_ updater: SUUpdater) {
         shouldSkipTerminationConfirmation = true
         shouldShowSettingsOnNextLaunch = true
     }
-    
+
     func updater(_ updater: SUUpdater, didCancelInstallUpdateOnQuit item: SUAppcastItem) {
         shouldSkipTerminationConfirmation = false
     }
-    
+
 }

@@ -147,11 +147,7 @@ struct SettingsView: View {
             }
             .disabled(!settings.isChangeSystemAppearanceBasedOnAmbientLightEnabled)
 
-            Text(settings.currentSettingsDescription)
-                .font(.system(size: 11))
-                .foregroundColor(Color(NSColor.tertiaryLabelColor))
-//                .multilineTextAlignment(.center)
-                .lineLimit(nil)
+            statusLineView
         }
     }
 
@@ -351,6 +347,100 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Status Line
+
+    private var statusLineView: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Circle()
+                .fill(statusBulletColor)
+                .frame(width: 8, height: 8)
+                .padding(.top, 3)
+            Text(statusText)
+                .font(.system(size: 11))
+                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 350, minHeight: 40, alignment: .topLeading)
+        }
+    }
+
+    private var statusBulletColor: Color {
+        if !settings.isChangeSystemAppearanceBasedOnAmbientLightEnabled {
+            return .gray
+        }
+        if settings.timeScheduleMode != .disabled && !timeScheduleManager.isWithinSchedule {
+            return .gray
+        }
+        return .green
+    }
+
+    private var statusText: String {
+        guard settings.isChangeSystemAppearanceBasedOnAmbientLightEnabled else {
+            let isAuto = UserDefaults.standard.bool(forKey: "AppleInterfaceStyleSwitchesAutomatically")
+            if isAuto {
+                return "DarkModeBuddy is off, switching is managed by macOS."
+            }
+            let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            if isDark {
+                return "DarkModeBuddy is off, dark mode is set by macOS."
+            }
+            return "DarkModeBuddy is off, light mode is set by macOS."
+        }
+
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let threshold = settings.darknessThreshold.formattedNoFractionDigits
+        let duration = settings.darknessThresholdIntervalInSeconds.formattedLongTime
+        let timeConstraintsOn = settings.timeScheduleMode != .disabled
+
+        if timeConstraintsOn {
+            if !timeScheduleManager.isWithinSchedule {
+                let startTime = scheduleStartTimeString
+                return "Automatic switching is temporarily disabled until \(startTime). After that, dark mode will be enabled when ambient light stays below \(threshold) for over \(duration)."
+            } else {
+                let endTime = scheduleEndTimeString
+                if isDark {
+                    return "Automatic switching is active until \(endTime). Light mode will be enabled when ambient light stays above \(threshold) for over \(duration), or at \(endTime)."
+                } else {
+                    return "Automatic switching is active until \(endTime). Dark mode will be enabled when ambient light stays below \(threshold) for over \(duration)."
+                }
+            }
+        } else {
+            if isDark {
+                return "Automatic switching is active. Light mode will be enabled when ambient light stays above \(threshold) for over \(duration)."
+            } else {
+                return "Automatic switching is active. Dark mode will be enabled when ambient light stays below \(threshold) for over \(duration)."
+            }
+        }
+    }
+
+    private var scheduleStartTimeString: String {
+        switch settings.timeScheduleMode {
+        case .fixedTime:
+            return String(format: "%02d:%02d", settings.fixedStartHour, settings.fixedStartMinute)
+        case .solarRelative:
+            if let sunset = timeScheduleManager.computedSunset {
+                return sunset.formattedTime
+            }
+            return "\u{2014}"
+        case .disabled:
+            return "\u{2014}"
+        }
+    }
+
+    private var scheduleEndTimeString: String {
+        switch settings.timeScheduleMode {
+        case .fixedTime:
+            return String(format: "%02d:%02d", settings.fixedEndHour, settings.fixedEndMinute)
+        case .solarRelative:
+            if let sunrise = timeScheduleManager.computedSunrise {
+                return sunrise.formattedTime
+            }
+            return "\u{2014}"
+        case .disabled:
+            return "\u{2014}"
+        }
+    }
+
     // MARK: - Current Light Indicator
 
     private var currentLightIndicator: some View {
@@ -404,16 +494,6 @@ extension Date {
         f.dateStyle = .none
         f.timeStyle = .short
         return f.string(from: self)
-    }
-}
-
-extension DMBSettings {
-    var currentSettingsDescription: String {
-        guard isChangeSystemAppearanceBasedOnAmbientLightEnabled else {
-            return "Dark Mode will not be enabled automatically based on ambient light."
-        }
-
-        return "Dark Mode will be enabled when the ambient light stays below \(darknessThreshold.formattedNoFractionDigits) for over \(darknessThresholdIntervalInSeconds.formattedLongTime)."
     }
 }
 

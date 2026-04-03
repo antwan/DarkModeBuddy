@@ -8,6 +8,17 @@
 import SwiftUI
 import DarkModeBuddyCore
 
+private extension View {
+    @ViewBuilder
+    func disabledAppearance(_ isDisabled: Bool) -> some View {
+        if isDisabled {
+            self.foregroundColor(Color(NSColor.disabledControlTextColor))
+        } else {
+            self
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var reader: DMBAmbientLightSensorReader
     @EnvironmentObject var settings: DMBSettings
@@ -34,6 +45,7 @@ struct SettingsView: View {
     }()
 
     var body: some View {
+
         Group {
             if reader.isSensorReady {
                 settingsControls
@@ -41,27 +53,32 @@ struct SettingsView: View {
                 UnsupportedMacView()
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding([.top, .bottom])
+        .fixedSize(horizontal: true, vertical: true)
+        .padding([.top, .bottom], 22)
         .padding([.leading, .trailing], 22)
-        .onAppear { reader.activate() }
+        .onAppear {
+            reader.activate()
+            if settings.timeScheduleMode != .disabled {
+                selectedTimeMode = settings.timeScheduleMode
+            }
+        }
     }
 
     private var settingsControls: some View {
         VStack(alignment: .leading, spacing: 32) {
             Toggle(
-                "Launch at Login",
+                "Launch at login",
                 isOn: $settings.isLaunchAtLoginEnabled
             )
 
             Toggle(
-                "Change Theme Automatically",
+                "Change theme automatically",
                 isOn: $settings.isChangeSystemAppearanceBasedOnAmbientLightEnabled
             )
 
             Group {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Go Dark When Ambient Light Falls Below:")
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Go dark when ambient light falls below:")
 
                     HStack(alignment: .firstTextBaseline) {
                         Slider(value: $settings.darknessThreshold, in: darknessInterval)
@@ -101,7 +118,7 @@ struct SettingsView: View {
                         .padding(.bottom, 5)
 
                     HStack(alignment: .firstTextBaseline) {
-                        Text("Current Ambient Light Level:")
+                        Text("Current ambient light level:")
                         Text("\(reader.ambientLightValue.formattedNoFractionDigits)")
                             .font(.system(size: 12).monospacedDigit())
                     }
@@ -146,9 +163,30 @@ struct SettingsView: View {
                 }
             }
             .disabled(!settings.isChangeSystemAppearanceBasedOnAmbientLightEnabled)
+            .disabledAppearance(!settings.isChangeSystemAppearanceBasedOnAmbientLightEnabled)
 
             statusLineView
         }
+    }
+
+    // MARK: - Duration Slider Binding
+
+    private var durationSliderBinding: Binding<Double> {
+        Binding(
+            get: {
+                let steps = Self.durationSteps
+                let value = settings.darknessThresholdIntervalInSeconds
+                // Find the closest step index
+                let idx = steps.enumerated().min(by: { abs($0.element - value) < abs($1.element - value) })?.offset ?? 0
+                return Double(idx)
+            },
+            set: { newIndex in
+                let idx = Int(newIndex.rounded())
+                let steps = Self.durationSteps
+                guard idx >= 0 && idx < steps.count else { return }
+                settings.darknessThresholdIntervalInSeconds = steps[idx]
+            }
+        )
     }
 
     // MARK: - Time Constraints Bindings
@@ -174,26 +212,6 @@ struct SettingsView: View {
                 if settings.timeScheduleMode != .disabled {
                     settings.timeScheduleMode = newMode
                 }
-            }
-        )
-    }
-
-    // MARK: - Duration Slider Binding
-
-    private var durationSliderBinding: Binding<Double> {
-        Binding(
-            get: {
-                let steps = Self.durationSteps
-                let value = settings.darknessThresholdIntervalInSeconds
-                // Find the closest step index
-                let idx = steps.enumerated().min(by: { abs($0.element - value) < abs($1.element - value) })?.offset ?? 0
-                return Double(idx)
-            },
-            set: { newIndex in
-                let idx = Int(newIndex.rounded())
-                let steps = Self.durationSteps
-                guard idx >= 0 && idx < steps.count else { return }
-                settings.darknessThresholdIntervalInSeconds = steps[idx]
             }
         )
     }
@@ -253,7 +271,7 @@ struct SettingsView: View {
                             }
                         }
                         .frame(width: 180, alignment: .leading)
-
+                        
                         HStack {
                             Text("Start:").frame(width: 35, alignment: .leading)
                             if #available(macOS 26.0, *) {
@@ -268,7 +286,7 @@ struct SettingsView: View {
                             }
                         }
                         .frame(width: 180, alignment: .leading)
-
+                        
                         HStack {
                             Text("End:")
                                 .frame(width: 35, alignment: .leading)
@@ -282,7 +300,7 @@ struct SettingsView: View {
                     if locationManager.hasLocation {
                         solarTimesDisplay
                     }
-
+                
             }
 
             if !locationManager.hasLocation {
@@ -326,24 +344,6 @@ struct SettingsView: View {
                 .font(.system(size: 11))
                 .foregroundColor(Color(NSColor.secondaryLabelColor))
             }
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func sunsetLabel(for offset: SolarOffset) -> String {
-        switch offset.rawValue {
-        case let v where v < 0: return "\(offset.label) before sunset"
-        case 0: return "At sunset"
-        default: return "\(offset.label) after sunset"
-        }
-    }
-
-    private func sunriseLabel(for offset: SolarOffset) -> String {
-        switch offset.rawValue {
-        case let v where v < 0: return "\(offset.label) before sunrise"
-        case 0: return "At sunrise"
-        default: return "\(offset.label) after sunrise"
         }
     }
 
@@ -458,15 +458,33 @@ struct SettingsView: View {
                 .position(x: xPosition, y: geometry.size.height / 2)
         }
     }
+
+    // MARK: - Helpers
+
+    private func sunsetLabel(for offset: SolarOffset) -> String {
+        switch offset.rawValue {
+        case let v where v < 0: return "\(offset.label) before sunset"
+        case 0: return "At sunset"
+        default: return "\(offset.label) after sunset"
+        }
+    }
+
+    private func sunriseLabel(for offset: SolarOffset) -> String {
+        switch offset.rawValue {
+        case let v where v < 0: return "\(offset.label) before sunrise"
+        case 0: return "At sunrise"
+        default: return "\(offset.label) after sunrise"
+        }
+    }
 }
 
 extension NumberFormatter {
     static let noFractionDigits: NumberFormatter = {
         let f = NumberFormatter()
-
+        
         f.numberStyle = .decimal
         f.maximumFractionDigits = 0
-
+        
         return f
     }()
 }

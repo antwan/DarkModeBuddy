@@ -27,13 +27,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         s.timeScheduleManager = timeScheduleManager
         return s
     }()
-
+    
     private var shouldShowUI: Bool {
         !settings.hasLaunchedAppBefore
         || shouldShowSettingsOnNextLaunch
         || UserDefaults.standard.bool(forKey: "ShowSettings")
     }
-
+    
     func applicationWillFinishLaunching(_ notification: Notification) {
         guard !isRunningInPreview else { return }
         SUUpdater.shared()?.delegate = self
@@ -50,7 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settings.hasLaunchedAppBefore = true
             showSettingsWindow(nil)
         }
-
+        
         timeScheduleManager.activate()
         switcher.activate()
 
@@ -61,14 +61,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
     }
-
+    
     private lazy var sensorReader = DMBAmbientLightSensorReader(frequency: .realtime)
 
     @IBAction func showSettingsWindow(_ sender: Any?) {
         NSApp.setActivationPolicy(.regular)
-
+        
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 385, height: 360),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 580),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         window.center()
@@ -78,25 +78,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isMovableByWindowBackground = true
         window.delegate = self
         window.isReleasedWhenClosed = false
-
+        
         let view = SettingsView()
             .environmentObject(sensorReader)
             .environmentObject(settings)
             .environmentObject(locationManager)
             .environmentObject(timeScheduleManager)
-
-        window.contentView = NSHostingView(rootView: view)
-
+        
+        let hostingController = AutoSizingHostingController(rootView: view)
+        window.contentViewController = hostingController
+        
         window.makeKeyAndOrderFront(nil)
         window.center()
-
+        
         NSApp.activate(ignoringOtherApps: true)
     }
-
+    
     @IBAction func terminate(_ sender: Any?) {
         // No need to confirm on quit if the user's Mac is not supported.
         shouldSkipTerminationConfirmation = !sensorReader.isSensorReady
-
+        
         NSApp.terminate(sender)
     }
 
@@ -107,21 +108,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard !isShowingSettingsWindow else { return true }
-
+        
         showSettingsWindow(nil)
-
+        
         return true
     }
-
+    
     private var shouldShowSettingsOnNextLaunch: Bool {
         get {
             let value = UserDefaults.standard.bool(forKey: #function)
-
+            
             if value {
                 // Reset flag
                 UserDefaults.standard.set(false, forKey: #function)
             }
-
+            
             return value
         }
         set {
@@ -129,9 +130,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.synchronize()
         }
     }
-
+    
     private var shouldSkipTerminationConfirmation = false
-
+    
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !shouldSkipTerminationConfirmation else {
             switcher.restoreMacOSAutoDarkMode()
@@ -151,11 +152,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateNow
         } else {
             window?.close()
-
+            
             return .terminateCancel
         }
     }
-
+    
     @objc func receivedShutdownNotification(_ note: Notification) {
         shouldSkipTerminationConfirmation = true
     }
@@ -166,21 +167,36 @@ extension AppDelegate: NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-
+        
         window = nil
     }
+    
+}
 
+final class AutoSizingHostingController<Content: View>: NSHostingController<Content> {
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard let window = view.window else { return }
+        let fittingSize = view.fittingSize
+        let targetSize = NSSize(
+            width: max(fittingSize.width, 420),
+            height: fittingSize.height
+        )
+        if window.contentView?.frame.size != targetSize {
+            window.setContentSize(targetSize)
+        }
+    }
 }
 
 extension AppDelegate: SUUpdaterDelegate {
-
+    
     func updaterWillRelaunchApplication(_ updater: SUUpdater) {
         shouldSkipTerminationConfirmation = true
         shouldShowSettingsOnNextLaunch = true
     }
-
+    
     func updater(_ updater: SUUpdater, didCancelInstallUpdateOnQuit item: SUAppcastItem) {
         shouldSkipTerminationConfirmation = false
     }
-
+    
 }

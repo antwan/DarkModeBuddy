@@ -14,7 +14,7 @@ struct SettingsView: View {
     @EnvironmentObject var locationManager: LocationManager
     @EnvironmentObject var timeScheduleManager: TimeScheduleManager
 
-    private let darknessInterval: ClosedRange<Double> = 0...3000
+    private let darknessInterval: ClosedRange<Double> = 0...400
 
     @State private var isShowingDarknessValueOutOfBoundsAlert = false
     @State private var isEditingAmbientLightLevelManually = false
@@ -23,6 +23,15 @@ struct SettingsView: View {
 
     private static let hourOptions = Array(0...23)
     private static let minuteOptions = [0, 15, 30, 45]
+
+    // Non-linear duration steps: 5s increments to 60s, 15s to 3min, 1min to 10min
+    private static let durationSteps: [Double] = {
+        var steps = [Double]()
+        for s in stride(from: 5.0, through: 60.0, by: 5.0) { steps.append(s) }
+        for s in stride(from: 75.0, through: 180.0, by: 15.0) { steps.append(s) }
+        for s in stride(from: 240.0, through: 600.0, by: 60.0) { steps.append(s) }
+        return steps
+    }()
 
     var body: some View {
         Group {
@@ -56,7 +65,7 @@ struct SettingsView: View {
 
                     HStack(alignment: .firstTextBaseline) {
                         Slider(value: $settings.darknessThreshold, in: darknessInterval)
-                            .frame(maxWidth: 300)
+                            .frame(maxWidth: 330)
                         if isEditingAmbientLightLevelManually {
                             TextField("", text: $editingAmbientLightManuallyTextFieldStore, onCommit: {
                                 guard let newValue = Double(editingAmbientLightManuallyTextFieldStore),
@@ -68,11 +77,12 @@ struct SettingsView: View {
                                 settings.darknessThreshold = newValue
                                 isEditingAmbientLightLevelManually = false
                             })
-                            .frame(maxWidth: 40)
+                            .frame(maxWidth: 35)
                         } else {
                             Text("\(settings.darknessThreshold.formattedNoFractionDigits)")
                                 .font(.system(size: 12, weight: .medium).monospacedDigit())
-                                .onTapGesture(count: 2) {
+                                .frame(width: 35).onTapGesture(count: 2)
+                                {
                                     self.editingAmbientLightManuallyTextFieldStore = "\(settings.darknessThreshold.formattedNoFractionDigits)"
                                     isEditingAmbientLightLevelManually = true
                                 }
@@ -84,6 +94,12 @@ struct SettingsView: View {
                               dismissButton: .default(Text("OK")))
                     }
 
+                    currentLightIndicator
+                        .frame(height: 5, alignment: .leading)
+                        .frame(maxHeight: 5)
+                        .frame(maxWidth: 330)
+                        .padding(.bottom, 5)
+
                     HStack(alignment: .firstTextBaseline) {
                         Text("Current Ambient Light Level:")
                         Text("\(reader.ambientLightValue.formattedNoFractionDigits)")
@@ -93,14 +109,15 @@ struct SettingsView: View {
                     .foregroundColor(Color(NSColor.secondaryLabelColor))
 
 
-                    Text("Delay Time:")
+                    Text("Duration threshold:")
                         .padding(.top, 22)
 
                     HStack(alignment: .firstTextBaseline) {
-                        Slider(value: $settings.darknessThresholdIntervalInSeconds, in: 15...600, step: 15)
+                        Slider(value: durationSliderBinding, in: 0...Double(Self.durationSteps.count - 1), step: 1)
+                            .frame(maxWidth: 330)
                         Text(settings.darknessThresholdIntervalInSeconds.formattedTime)
                             .font(.system(size: 12, weight: .medium).monospacedDigit())
-                            .frame(width: 50, alignment: .trailing)
+                            .frame(width: 35)
                     }
                 }
 
@@ -161,6 +178,26 @@ struct SettingsView: View {
                 if settings.timeScheduleMode != .disabled {
                     settings.timeScheduleMode = newMode
                 }
+            }
+        )
+    }
+
+    // MARK: - Duration Slider Binding
+
+    private var durationSliderBinding: Binding<Double> {
+        Binding(
+            get: {
+                let steps = Self.durationSteps
+                let value = settings.darknessThresholdIntervalInSeconds
+                // Find the closest step index
+                let idx = steps.enumerated().min(by: { abs($0.element - value) < abs($1.element - value) })?.offset ?? 0
+                return Double(idx)
+            },
+            set: { newIndex in
+                let idx = Int(newIndex.rounded())
+                let steps = Self.durationSteps
+                guard idx >= 0 && idx < steps.count else { return }
+                settings.darknessThresholdIntervalInSeconds = steps[idx]
             }
         )
     }
@@ -313,6 +350,24 @@ struct SettingsView: View {
         default: return "\(offset.label) after sunrise"
         }
     }
+
+    // MARK: - Current Light Indicator
+
+    private var currentLightIndicator: some View {
+        GeometryReader { geometry in
+            let range = darknessInterval.upperBound - darknessInterval.lowerBound
+            let clampedValue = min(max(reader.ambientLightValue, darknessInterval.lowerBound), darknessInterval.upperBound)
+            let fraction = CGFloat((clampedValue - darknessInterval.lowerBound) / range)
+            let trackInset: CGFloat = 8
+            let trackWidth = geometry.size.width - trackInset * 2
+            let xPosition = trackInset + trackWidth * fraction
+
+            Text("\u{25B2}")
+                .font(.system(size: 6))
+                .foregroundColor(Color(NSColor.secondaryLabelColor))
+                .position(x: xPosition, y: geometry.size.height / 2)
+        }
+    }
 }
 
 extension NumberFormatter {
@@ -333,7 +388,8 @@ extension Double {
     var formattedTime: String {
         let formatter = DateComponentsFormatter()
         formatter.unitsStyle = .positional
-        return (formatter.string(from: self) ?? "!!!" ) + "s"
+        let str = formatter.string(from: self) ?? "!!!"
+        return self < 60 ? str + "s" : str
     }
     var formattedLongTime: String {
         let formatter = DateComponentsFormatter()

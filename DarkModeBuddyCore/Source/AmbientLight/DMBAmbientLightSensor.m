@@ -49,6 +49,7 @@ static BOOL DMBIsRunningInPreview(void) {
 
     io_connect_t _legacySensorDataPort;
     BOOL _legacySensorInitializedSuccessfully;
+    BOOL _didLogLegacySensorFailure;
 }
 
 - (instancetype)init
@@ -90,13 +91,27 @@ static BOOL DMBIsRunningInPreview(void) {
     IOHIDEventRef event = [self copyHIDEvent];
     
     if (!event) {
-        [self _readLegacy];
+        if ([self _shouldUseLegacySensor]) {
+            [self _readLegacy];
+        } else {
+            // Modern sensor temporarily unavailable (e.g. while asleep), there's no legacy sensor to fall back to.
+            self.value = -1;
+        }
         return;
     }
     
     self.value = IOHIDEventGetFloatValue(event, IOHIDEventFieldBase(kAmbientLightSensorEvent));
     
     CFRelease(event);
+}
+
+- (BOOL)_shouldUseLegacySensor
+{
+#if DEBUG
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"DMBFakeSystemUsesLegacySensor"]) return YES;
+#endif
+
+    return [DMBAmbientLightSensor hardwareUsesLegacySensor];
 }
 
 - (void)_initializeLegacySensorObject
@@ -108,13 +123,20 @@ static BOOL DMBIsRunningInPreview(void) {
     if (!_legacySensorInitializedSuccessfully) {
         legacySensorObject = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching("AppleLMUController"));
         if (!legacySensorObject) {
-            os_log_fault(self.log, "Failed to initialize AppleLMUController");
+            if (!_didLogLegacySensorFailure) {
+                _didLogLegacySensorFailure = YES;
+                os_log_fault(self.log, "Failed to initialize AppleLMUController");
+            }
             return;
         }
     }
     
     if (IOServiceOpen(legacySensorObject, mach_task_self(), 0, &_legacySensorDataPort) != KERN_SUCCESS) {
-        os_log_fault(self.log, "Failed to open AppleLMUController service");
+        IOObjectRelease(legacySensorObject);
+        if (!_didLogLegacySensorFailure) {
+            _didLogLegacySensorFailure = YES;
+            os_log_fault(self.log, "Failed to open AppleLMUController service");
+        }
         return;
     }
     

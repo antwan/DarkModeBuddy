@@ -18,6 +18,10 @@ public final class TimeScheduleManager: ObservableObject {
     let locationManager: LocationManager
 
     @Published public var isWithinSchedule: Bool = true
+    /// Whether a time window is actually in effect. False when scheduling is disabled
+    /// or when the solar schedule can't be computed (no location, polar day/night),
+    /// in which case `isWithinSchedule` is `true` only as a permissive fallback.
+    @Published public private(set) var isScheduleActive: Bool = false
     @Published public var computedSunrise: Date?
     @Published public var computedSunset: Date?
 
@@ -56,16 +60,24 @@ public final class TimeScheduleManager: ObservableObject {
         evaluate()
     }
 
+    /// Re-evaluates the schedule immediately, e.g. after the computer wakes up,
+    /// instead of waiting for the next timer tick.
+    public func refresh() {
+        evaluate()
+    }
+
     private func evaluate() {
         let now = Date()
 
         switch settings.timeScheduleMode {
         case .disabled:
+            isScheduleActive = false
             isWithinSchedule = true
             computedSunrise = nil
             computedSunset = nil
 
         case .fixedTime:
+            isScheduleActive = true
             isWithinSchedule = isWithinFixedWindow(now: now)
             computedSunrise = nil
             computedSunset = nil
@@ -97,6 +109,7 @@ public final class TimeScheduleManager: ObservableObject {
     private func evaluateSolarRelative(now: Date) {
         guard let lat = locationManager.latitude, let lon = locationManager.longitude else {
             os_log("No location available for solar calculation, falling back to always active", log: log, type: .debug)
+            isScheduleActive = false
             isWithinSchedule = true
             computedSunrise = nil
             computedSunset = nil
@@ -106,6 +119,7 @@ public final class TimeScheduleManager: ObservableObject {
         // Compute for today
         guard let solar = SolarCalculator.sunriseSunset(for: now, latitude: lat, longitude: lon) else {
             os_log("Sun does not rise/set at this location today, falling back to always active", log: log, type: .debug)
+            isScheduleActive = false
             isWithinSchedule = true
             return
         }
@@ -115,6 +129,7 @@ public final class TimeScheduleManager: ObservableObject {
 
         computedSunset = adjustedSunset
         computedSunrise = adjustedSunrise
+        isScheduleActive = true
 
         // The schedule window goes from adjustedSunset to adjustedSunrise (next day if needed)
         if adjustedSunset <= adjustedSunrise {

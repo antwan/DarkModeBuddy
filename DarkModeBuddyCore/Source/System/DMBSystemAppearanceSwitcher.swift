@@ -76,10 +76,16 @@ public final class DMBSystemAppearanceSwitcher: ObservableObject {
             self?.reset()
         }.store(in: &cancellables)
 
-        // Re-evaluate when the time schedule window changes
-        timeScheduleManager?.$isWithinSchedule.removeDuplicates().sink { [weak self] _ in
-            self?.reset()
-        }.store(in: &cancellables)
+        // Re-evaluate when the time schedule window changes. @Published fires before
+        // the new value is stored, so hop to the main queue to read the updated state.
+        if let scheduleManager = timeScheduleManager {
+            scheduleManager.$isWithinSchedule.removeDuplicates()
+                .combineLatest(scheduleManager.$isScheduleActive.removeDuplicates())
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    self?.scheduleChanged()
+                }.store(in: &cancellables)
+        }
 
         // Disable/restore macOS Auto when the toggle changes
         settings.$isChangeSystemAppearanceBasedOnAmbientLightEnabled.sink { [weak self] enabled in
@@ -122,6 +128,9 @@ public final class DMBSystemAppearanceSwitcher: ObservableObject {
     
     private func setupUpdateAppearanceOnWake() {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            // The schedule may have crossed a boundary while asleep, don't wait for its timer.
+            self?.timeScheduleManager?.refresh()
+
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 self?.attemptAppearanceChangeOnWake()
             }
@@ -129,17 +138,57 @@ public final class DMBSystemAppearanceSwitcher: ObservableObject {
     }
     
     private func attemptAppearanceChangeOnWake() {
+        // Start from a clean slate so a stale candidate can't block later changes.
+        candidateAppearance = nil
+        cancelScheduledApperanceChange()
+
+        // The time schedule always wins over the sensor, even if immediate change on wake is disabled.
+        guard !applyScheduleIfOutsideWindow() else { return }
+
         guard settings.isImmediateChangeOnComputerWakeEnabled else { return }
         
         reader.update()
         
         os_log("%{public}@ %.2f", log: log, type: .debug, #function, reader.ambientLightValue)
         
-        if reader.ambientLightValue < settings.darknessThreshold {
+        if reader.ambientLightValue == -1 {
+            // Sensor unavailable: within an active schedule window, dark mode is expected.
+            guard timeScheduleManager?.isScheduleActive == true else { return }
+            changeSystemAppearance(to: .dark)
+        } else if reader.ambientLightValue < settings.darknessThreshold {
             changeSystemAppearance(to: .dark)
         } else {
             changeSystemAppearance(to: .light)
         }
+    }
+
+    private func scheduleChanged() {
+        candidateAppearance = nil
+        cancelScheduledApperanceChange()
+
+        guard !applyScheduleIfOutsideWindow() else { return }
+
+        evaluateAmbientLight(with: reader.ambientLightValue)
+    }
+
+    /// When a time schedule is in effect and the current time is outside of its window,
+    /// light mode is required regardless of ambient light, so it's applied right away.
+    /// This doesn't rely on the sensor, so it also works while the lid is closed or the
+    /// sensor is unavailable, leaving the Mac in the right appearance when it wakes up.
+    /// - Returns: `true` if the schedule determined the appearance.
+    private func applyScheduleIfOutsideWindow() -> Bool {
+        guard let scheduleManager = timeScheduleManager,
+              scheduleManager.isScheduleActive,
+              !scheduleManager.isWithinSchedule
+        else { return false }
+
+        os_log("Outside time schedule, applying light mode now", log: self.log, type: .debug)
+
+        candidateAppearance = .light
+        cancelScheduledApperanceChange()
+        changeSystemAppearance(to: .light, ignoringClamshell: true)
+
+        return true
     }
     
     private func reset() {
@@ -178,8 +227,6 @@ public final class DMBSystemAppearanceSwitcher: ObservableObject {
         os_log("Candidate appearance is %@", log: self.log, type: .debug, candidateAppearance?.description ?? "")
         #endif
 
-        guard value != -1 else { return }
-
         let newAppearance: Appearance
 
         // If a time constraint is set and we're outside the window, force light mode.
@@ -187,6 +234,11 @@ public final class DMBSystemAppearanceSwitcher: ObservableObject {
         if let scheduleManager = timeScheduleManager, !scheduleManager.isWithinSchedule {
             os_log("Outside time schedule, forcing light mode", log: self.log, type: .debug)
             newAppearance = .light
+        } else if value == -1 {
+            // Sensor unavailable (e.g. asleep or lid closed): follow the time schedule if there is one.
+            guard timeScheduleManager?.isScheduleActive == true else { return }
+            os_log("Ambient light sensor unavailable, following time schedule", log: self.log, type: .debug)
+            newAppearance = .dark
         } else if value < settings.darknessThreshold {
             os_log("Below threshold %{public}.2f", log: self.log, type: .debug, settings.darknessThreshold)
             newAppearance = .dark
@@ -207,7 +259,7 @@ public final class DMBSystemAppearanceSwitcher: ObservableObject {
         
         guard newAppearance != .current else { return }
 
-        os_log("New candidate appearance is %@", log: self.log, type: .debug, newAppearance.description)
+        os_log("New candidate appearance is %{public}@", log: self.log, type: .debug, newAppearance.description)
         
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
@@ -220,10 +272,12 @@ public final class DMBSystemAppearanceSwitcher: ObservableObject {
         os_log("Scheduled appearance change to %{public}@ for %{public}@, if conditions remain favorable (interval = %{public}.2f)", log: self.log, type: .debug, newAppearance.description, Date().addingTimeInterval(settings.darknessThresholdIntervalInSeconds).description, settings.darknessThresholdIntervalInSeconds)
     }
     
-    private func changeSystemAppearance(to newAppearance: Appearance) {
+    /// - Parameter ignoringClamshell: The clamshell check exists because a closed lid covers
+    /// the sensor; pass `true` for changes that don't depend on the sensor.
+    private func changeSystemAppearance(to newAppearance: Appearance, ignoringClamshell: Bool = false) {
         guard newAppearance != .current else { return }
 
-        if settings.isDisableAppearanceChangeInClamshellModeEnabled {
+        if settings.isDisableAppearanceChangeInClamshellModeEnabled, !ignoringClamshell {
             guard !ClamshellStateChecker.isClamshellClosed() else {
                 os_log("Skipping appearance change because the Mac is in clamshell mode", log: self.log, type: .debug)
                 return

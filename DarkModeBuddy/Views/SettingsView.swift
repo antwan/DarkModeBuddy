@@ -31,7 +31,7 @@ struct SettingsView: View {
     // useful indoor range), the remaining 20% covers 6000...30000 for bright
     // rooms and direct daylight.
     private let darknessSliderBreakpointPosition: Double = 0.8
-    private let darknessSliderBreakpointValue: Double = 6000
+    private let darknessSliderBreakpointValue: Double = 1000
 
     private func value(forSliderPosition position: Double) -> Double {
         let bp = darknessSliderBreakpointPosition
@@ -116,8 +116,8 @@ struct SettingsView: View {
                     Text("Go dark when ambient light falls below:")
 
                     HStack(alignment: .firstTextBaseline) {
-                        Slider(value: $settings.darknessThreshold, in: darknessInterval)
-                            .frame(maxWidth: 330)
+                        Slider(value: darknessThresholdSliderBinding, in: 0...1)
+                            .frame(maxWidth: 320)
                         if isEditingAmbientLightLevelManually {
                             TextField("", text: $editingAmbientLightManuallyTextFieldStore, onCommit: {
                                 guard let newValue = Double(editingAmbientLightManuallyTextFieldStore),
@@ -129,11 +129,11 @@ struct SettingsView: View {
                                 settings.darknessThreshold = newValue
                                 isEditingAmbientLightLevelManually = false
                             })
-                            .frame(maxWidth: 35)
+                            .frame(maxWidth: 45)
                         } else {
                             Text("\(settings.darknessThreshold.formattedNoFractionDigits)")
                                 .font(.system(size: 12, weight: .medium).monospacedDigit())
-                                .frame(width: 35).onTapGesture(count: 2)
+                                .frame(width: 45).onTapGesture(count: 2)
                                 {
                                     self.editingAmbientLightManuallyTextFieldStore = "\(settings.darknessThreshold.formattedNoFractionDigits)"
                                     isEditingAmbientLightLevelManually = true
@@ -149,7 +149,7 @@ struct SettingsView: View {
                     currentLightIndicator
                         .frame(height: 5, alignment: .leading)
                         .frame(maxHeight: 5)
-                        .frame(maxWidth: 330)
+                        .frame(maxWidth: 320)
                         .padding(.bottom, 5)
 
                     HStack(alignment: .firstTextBaseline) {
@@ -166,10 +166,10 @@ struct SettingsView: View {
 
                     HStack(alignment: .firstTextBaseline) {
                         Slider(value: durationSliderBinding, in: 0...Double(Self.durationSteps.count - 1), step: 1)
-                            .frame(maxWidth: 330)
+                            .frame(maxWidth: 320)
                         Text(settings.darknessThresholdIntervalInSeconds.formattedTime)
                             .font(.system(size: 12, weight: .medium).monospacedDigit())
-                            .frame(width: 35)
+                            .frame(width: 45)
                     }
                 }
 
@@ -480,9 +480,21 @@ struct SettingsView: View {
 
     private var currentLightIndicator: some View {
         GeometryReader { geometry in
-            let range = darknessInterval.upperBound - darknessInterval.lowerBound
+
             let clampedValue = min(max(reader.ambientLightValue, darknessInterval.lowerBound), darknessInterval.upperBound)
-            let fraction = CGFloat((clampedValue - darknessInterval.lowerBound) / range)
+
+            let fraction: CGFloat = {
+                if clampedValue < darknessSliderBreakpointValue {
+                    let t = (clampedValue - darknessInterval.lowerBound)
+                          / (darknessSliderBreakpointValue - darknessInterval.lowerBound)
+                    return CGFloat(t * darknessSliderBreakpointPosition)
+                } else {
+                    let t = (clampedValue - darknessSliderBreakpointValue)
+                          / (darknessInterval.upperBound - darknessSliderBreakpointValue)
+                    return CGFloat(darknessSliderBreakpointPosition + t * (1 - darknessSliderBreakpointPosition))
+                }
+            }()
+            
             let trackInset: CGFloat = 8
             let trackWidth = geometry.size.width - trackInset * 2
             let xPosition = trackInset + trackWidth * fraction
